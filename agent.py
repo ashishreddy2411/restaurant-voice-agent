@@ -42,6 +42,7 @@ from livekit.agents import (
     function_tool,
 )
 from livekit.plugins import deepgram, openai, silero
+from livekit.plugins.turn_detector.multilingual import MultilingualModel
 
 import database
 from restaurant_data import RESTAURANT_INFO, RESTAURANT_NAME, build_system_prompt, get_full_menu
@@ -325,8 +326,13 @@ async def entrypoint(ctx: JobContext) -> None:
             prefix_padding_duration=0.1,
         ),
         # STT — nova-2-phonecall is tuned for narrow-band 8kHz PSTN audio (real phone calls).
-        # Switch back to nova-3 if testing via browser/microphone only.
-        stt=deepgram.STT(model="nova-2-phonecall", language="en-US"),
+        # smart_format/punctuate disabled — saves processing overhead, LLM doesn't need them.
+        stt=deepgram.STT(
+            model="nova-2-phonecall",
+            language="en-US",
+            smart_format=False,
+            punctuate=False,
+        ),
         # LLM — Azure OpenAI. Reads AZURE_OPENAI_API_KEY and AZURE_OPENAI_ENDPOINT
         # from env vars automatically. azure_deployment must match your deployment
         # name in Azure AI Foundry exactly. Streams tokens immediately.
@@ -344,17 +350,22 @@ async def entrypoint(ctx: JobContext) -> None:
         tts=deepgram.TTS(model="aura-asteria-en"),
         # Barge-in: caller can interrupt the agent mid-sentence and it stops immediately.
         allow_interruptions=True,
-        # How long the caller must speak to count as an interruption.
-        # Lower to 0.5 if callers struggle to interrupt the agent.
-        min_interruption_duration=0.8,
+        # Require at least 2 words to trigger interruption — prevents SIP noise false positives.
+        min_interruption_words=2,
+        min_interruption_duration=0.6,
         # If VAD fires but no words are transcribed (background noise), agent resumes.
         resume_false_interruption=True,
-        # Start LLM inference as soon as partial speech arrives, overlapping with the
-        # caller still talking. Cuts perceived latency significantly on phone calls.
-        preemptive_generation=True,
-        # Minimum wait after VAD end-of-turn before sending to LLM.
-        # Default is 0.5s — lower it since we already have VAD silence detection.
+        # Transformer-based turn detector (MultilingualModel ~10ms inference locally).
+        # Semantically decides when the caller is done — not just waiting for silence.
+        # Enables safely lowering min_endpointing_delay without cutting callers off.
+        turn_detection=MultilingualModel(),
+        # NOTE: preemptive_generation disabled — active bug (livekit/agents #4219)
+        # causes duplicate LLM requests and double token cost. Re-enable once fixed.
+        # Minimum wait after turn-detector fires before LLM call. Safe at 0.1s
+        # because MultilingualModel handles semantic turn detection.
         min_endpointing_delay=0.1,
+        # Reduce max wait from default 3.0s to bound worst-case silent gaps.
+        max_endpointing_delay=2.0,
     )
 
     # ── Max Call Duration ─────────────────────────────────────────────────────
