@@ -291,6 +291,9 @@ async def entrypoint(ctx: JobContext) -> None:
         llm=openai.LLM.with_azure(
             azure_deployment=os.environ.get("AZURE_OPENAI_DEPLOYMENT", "gpt-5.2-chat"),
             api_version=os.environ.get("OPENAI_API_VERSION", "2024-10-01-preview"),
+            # Cap reply length — shorter replies = faster TTS start = lower perceived latency.
+            # Raise if the agent gets cut off mid-answer on complex questions.
+            max_tokens=250,
         ),
         # TTS — Deepgram Aura. Starts speaking as soon as the first LLM tokens arrive.
         # Other voice options:
