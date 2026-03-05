@@ -12,7 +12,7 @@ A production-grade AI phone receptionist built on LiveKit Agents. Vera answers r
 - Check item availability and quote exact prices
 - Take reservations (collects name, date, time, party size, special requests)
 - Handle barge-in — caller can interrupt mid-sentence
-- Quote factual data (prices, times, policies) with zero hallucination
+- Quote factual data (prices, times, policies) accurately from verified sources
 - Log every call transcript and reservation to Supabase
 
 ---
