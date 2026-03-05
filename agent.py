@@ -319,9 +319,8 @@ async def entrypoint(ctx: JobContext) -> None:
             # Shortest burst counted as real speech — filters pops and mic noise.
             min_speech_duration=0.05,
             # Silence duration before "turn ended".
-            # Raise further if the agent still cuts callers off mid-sentence.
-            # Lower to 0.3 for faster response if callers pause at natural breaks.
-            min_silence_duration=0.5,
+            # Raise to 0.5 if agent cuts callers off mid-sentence.
+            min_silence_duration=0.45,
             # Audio captured just before speech onset — catches the first syllable.
             prefix_padding_duration=0.1,
         ),
