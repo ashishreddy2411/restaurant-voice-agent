@@ -1,0 +1,24 @@
+# Secret credentials — NEVER commit this file
+.env
+
+# Python cache files — auto-generated, not needed in git
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# macOS system files
+.DS_Store
+
+# IDE files
+.vscode/
+.idea/
+
+# Logs (optional — remove this line if you want logs in git)
+logs/
+*.log

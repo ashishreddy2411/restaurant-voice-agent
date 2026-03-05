@@ -1,0 +1,11 @@
+# Core LiveKit Agents framework with the plugins we need:
+#   deepgram  → speech-to-text AND text-to-speech (Aura voices)
+#   openai    → Azure OpenAI-compatible LLM client
+#   silero    → voice activity detection (runs locally, free)
+livekit-agents[deepgram,openai,silero]~=1.4
+
+# Loads environment variables from the .env file into os.environ
+python-dotenv>=1.0.0
+
+# Supabase Python client — for logging calls and saving reservations
+supabase>=2.3.0
