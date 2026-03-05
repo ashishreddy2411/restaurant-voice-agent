@@ -75,7 +75,7 @@ class RestaurantAgent(Agent):
         context: RunContext,
         category: Annotated[
             str,
-            "Menu category to list. One of: 'appetizers', 'mains', 'desserts', 'drinks', or 'all'",
+            "Menu category to list. One of: 'appetizers', 'salads', 'mains', 'sides', 'desserts', 'drinks', or 'all'",
         ],
     ) -> str:
         """List menu items for a given category with prices and availability."""
@@ -145,26 +145,62 @@ class RestaurantAgent(Agent):
         context: RunContext,
         info_type: Annotated[
             str,
-            "Type of info: 'hours', 'address', 'parking', 'dress_code', 'reservation_policy', 'cuisine'",
+            (
+                "The type of information to look up. Use the exact key where possible. "
+                "Available keys: hours, address, phone, cuisine, about, parking, dress_code, "
+                "reservation_policy, waitlist_policy, kids_policy, dogs_policy, "
+                "happy_hour, holiday_note, private_dining, events, "
+                "gift_cards, catering, takeout, accessibility."
+            ),
         ],
     ) -> str:
-        """Get restaurant information: hours, address, parking, policies, etc."""
-        info_type = info_type.lower().strip()
+        """Get restaurant information: hours, address, parking, policies, events, etc."""
+        query = info_type.lower().strip()
 
-        if info_type == "hours":
+        # Hours need special formatting
+        if query == "hours":
             lines = [f"{day}: {t}" for day, t in RESTAURANT_INFO["hours"].items()]
             return "Our hours:\n" + "\n".join(lines)
 
-        value = RESTAURANT_INFO.get(info_type)
+        # Exact key match
+        value = RESTAURANT_INFO.get(query)
         if value and not isinstance(value, dict):
             return str(value)
 
-        # Fallback: most commonly needed info in one sentence
-        return (
-            f"{RESTAURANT_NAME} is at {RESTAURANT_INFO['address']}. "
-            f"Open Mon–Thu 11am–10pm, Fri–Sat 11am–11pm, Sun 12pm–9pm. "
-            f"Reach us at {RESTAURANT_INFO['phone']}."
-        )
+        # Fuzzy alias matching — handles LLM guesses like "pet_policy", "dog policy", etc.
+        aliases = {
+            "pet": "dogs_policy",
+            "dog": "dogs_policy",
+            "cat": "dogs_policy",
+            "animal": "dogs_policy",
+            "kid": "kids_policy",
+            "child": "kids_policy",
+            "children": "kids_policy",
+            "cancel": "reservation_policy",
+            "cancellation": "reservation_policy",
+            "walk": "waitlist_policy",
+            "walkin": "waitlist_policy",
+            "wheelchair": "accessibility",
+            "accessible": "accessibility",
+            "happy": "happy_hour",
+            "holiday": "holiday_note",
+            "private": "private_dining",
+            "event": "events",
+            "jazz": "events",
+            "live music": "events",
+            "gift": "gift_cards",
+            "cater": "catering",
+            "takeaway": "takeout",
+            "take out": "takeout",
+            "about": "about",
+            "story": "about",
+            "history": "about",
+        }
+        for keyword, key in aliases.items():
+            if keyword in query:
+                return str(RESTAURANT_INFO.get(key, "I don't have that information on hand."))
+
+        return "I don't have that specific information on hand — is there anything else I can help you with?"
 
     # ── Tool: Save Reservation ───────────────────────────────────────────────
     @function_tool
@@ -190,7 +226,10 @@ class RestaurantAgent(Agent):
         """
         # Default to the caller's own number if no different number was given
         phone = callback_phone.strip() or self._caller_number
-        requests = special_requests if special_requests.lower() != "none" else None
+        # Treat empty string, whitespace, and "none" all as no special requests
+        requests = special_requests.strip() or None
+        if requests and requests.lower() == "none":
+            requests = None
 
         saved = await database.save_reservation(
             guest_name=guest_name,
@@ -210,9 +249,9 @@ class RestaurantAgent(Agent):
             )
         else:
             return (
-                f"I've noted your reservation for {party_size} guests on {date} at {reservation_time} "
-                f"under {guest_name}. We'll confirm on {phone} shortly. "
-                f"Remember, we hold tables for 15 minutes!"
+                f"I'm having a little trouble on my end right now, but I have all your details: "
+                f"table for {party_size} under {guest_name}, {date} at {reservation_time}. "
+                f"Expect a call from us at {phone} shortly to confirm. We're sorry for the inconvenience!"
             )
 
 

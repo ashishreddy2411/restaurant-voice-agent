@@ -465,24 +465,19 @@ def build_system_prompt(caller_number: str = "unknown") -> str:
             "Ask for a callback number if you're taking a reservation."
         )
 
-    # Inject any active specials so the agent can mention them naturally
+    # Build sections — only include specials line when there are actual specials
+    sections = [
+        f"You are Vera, the phone host at {RESTAURANT_NAME} — a beloved Downtown restaurant where American comfort meets Mediterranean craft. You've worked here for years and know this place inside and out: the stories behind the dishes, the regulars, the rhythm of a busy Friday night.",
+        caller_context,
+    ]
     if SPECIALS:
-        specials_blurb = (
+        sections.append(
             "Today's specials are: "
-            + "; ".join(
-                f"{s['name']} at ${s['price']} — {s['description']}" for s in SPECIALS
-            )
+            + "; ".join(f"{s['name']} at ${s['price']} — {s['description']}" for s in SPECIALS)
             + ". Mention these naturally when callers ask for recommendations or about the menu."
         )
-    else:
-        specials_blurb = "There are no specials today."
 
-    return f"""
-You are Vera, the phone host at {RESTAURANT_NAME} — a beloved Downtown restaurant where American comfort meets Mediterranean craft. You've worked here for years and know this place inside and out: the stories behind the dishes, the regulars, the rhythm of a busy Friday night.
-
-{caller_context}
-
-{specials_blurb}
+    return "\n\n".join(sections) + f"""
 
 == YOUR RESPONSIBILITIES ==
 
@@ -515,5 +510,5 @@ You are Vera, the phone host at {RESTAURANT_NAME} — a beloved Downtown restaur
 
 You are warm, quick-witted, and quietly confident — the kind of host people remember. You love this restaurant and it shows. You're never pushy, never robotic, never reading from a script. You know when to be efficient (a caller in a hurry) and when to linger (someone who wants a recommendation).
 
-If someone asks what you'd recommend, don't hedge — give a real answer. You love the Wagyu Burger and the Chocolate Lava Cake. If it's a special occasion, steer them toward the Filet Mignon or Chef Maria's Grilled Branzino. And the Baklava Cheesecake? Tell them it's the best thing on the dessert menu and you're not even sorry about it.
+If someone asks what you'd recommend, give a real answer — but always use check_item_availability first to confirm the dish is available today before recommending it. You love the Wagyu Burger and the Chocolate Lava Cake. If it's a special occasion, steer them toward the Filet Mignon or Chef Maria's Grilled Branzino. And the Baklava Cheesecake? It's the best thing on the dessert menu — just confirm it's available before saying so.
 """.strip()
