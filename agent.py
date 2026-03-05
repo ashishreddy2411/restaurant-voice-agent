@@ -16,10 +16,13 @@ from __future__ import annotations
 
 import os
 
+# ── Load .env FIRST — before anything reads os.environ ───────────────────────
+# This must be before all other imports, otherwise modules like database.py
+# that initialize clients at import time will see empty environment variables.
+from dotenv import load_dotenv
+load_dotenv()
+
 # ── macOS SSL fix ─────────────────────────────────────────────────────────────
-# Python installed from python.org on Mac doesn't bundle SSL certificates.
-# This must happen before any other imports so aiohttp and livekit use the
-# correct certificate bundle when making HTTPS/WSS connections.
 import certifi
 os.environ.setdefault("SSL_CERT_FILE", certifi.where())
 # ─────────────────────────────────────────────────────────────────────────────
@@ -29,7 +32,6 @@ import logging
 import time
 from typing import Annotated
 
-from dotenv import load_dotenv
 from livekit.agents import (
     Agent,
     AgentSession,
@@ -42,10 +44,7 @@ from livekit.agents import (
 from livekit.plugins import deepgram, openai, silero
 
 import database
-from restaurant_data import MENU, RESTAURANT_INFO, RESTAURANT_NAME, SYSTEM_PROMPT
-
-# Load .env file before anything reads os.environ
-load_dotenv()
+from restaurant_data import MENU, RESTAURANT_INFO, RESTAURANT_NAME, build_system_prompt
 
 
 # ─── Logging ──────────────────────────────────────────────────────────────────
@@ -61,17 +60,13 @@ class RestaurantAgent(Agent):
     """
     The AI brain of our restaurant receptionist.
 
-    Subclasses Agent to:
-    1. Apply the restaurant's system prompt (personality + rules)
-    2. Define tools the LLM can call during a conversation
-
-    Tools are Python functions decorated with @function_tool.
-    The LLM decides autonomously when to call them based on context.
-    For example: caller asks "is the salmon available?" → LLM calls check_item_availability().
+    Accepts caller_number so the system prompt can pre-fill the callback
+    number and personalise the session context per call.
     """
 
-    def __init__(self) -> None:
-        super().__init__(instructions=SYSTEM_PROMPT)
+    def __init__(self, caller_number: str = "unknown") -> None:
+        super().__init__(instructions=build_system_prompt(caller_number))
+        self._caller_number = caller_number
 
     # ── Tool: List Menu Items ────────────────────────────────────────────────
     @function_tool
@@ -174,7 +169,6 @@ class RestaurantAgent(Agent):
         self,
         context: RunContext,
         guest_name: Annotated[str, "Full name of the person making the reservation"],
-        callback_phone: Annotated[str, "Phone number to confirm the reservation"],
         date: Annotated[str, "Reservation date, e.g. 'March 15' or 'this Saturday'"],
         reservation_time: Annotated[str, "Reservation time, e.g. '7:00 PM'"],
         party_size: Annotated[int, "Number of people in the party"],
@@ -182,16 +176,22 @@ class RestaurantAgent(Agent):
             str,
             "Dietary restrictions, allergies, or special occasions. Use 'none' if not mentioned.",
         ],
+        callback_phone: Annotated[
+            str,
+            "Callback phone number. Use the caller's number if they didn't provide a different one.",
+        ] = "",
     ) -> str:
         """
         Save a reservation to the database.
         Only call this AFTER the caller has confirmed all details are correct.
         """
+        # Default to the caller's own number if no different number was given
+        phone = callback_phone.strip() or self._caller_number
         requests = special_requests if special_requests.lower() != "none" else None
 
         saved = await database.save_reservation(
             guest_name=guest_name,
-            callback_phone=callback_phone,
+            callback_phone=phone,
             date=date,
             time=reservation_time,
             party_size=party_size,
@@ -200,16 +200,16 @@ class RestaurantAgent(Agent):
 
         if saved:
             return (
-                f"Reservation confirmed! Table for {party_size} under {guest_name} "
+                f"Perfect, you're all set! Table for {party_size} under {guest_name} "
                 f"on {date} at {reservation_time}. "
-                f"We'll call {callback_phone} to confirm. "
-                f"We hold reservations for 15 minutes — see you soon!"
+                f"We'll send a confirmation to {phone}. "
+                f"Please note we hold reservations for 15 minutes — if you're running late, give us a call!"
             )
         else:
-            # Database failed or not configured — still give caller a good experience
             return (
-                f"I've noted your request for {party_size} guests on {date} at {reservation_time} "
-                f"under {guest_name}. Our team will call {callback_phone} to confirm shortly."
+                f"I've noted your reservation for {party_size} guests on {date} at {reservation_time} "
+                f"under {guest_name}. We'll confirm on {phone} shortly. "
+                f"Remember, we hold tables for 15 minutes!"
             )
 
 
@@ -276,9 +276,9 @@ async def entrypoint(ctx: JobContext) -> None:
             # Shortest burst counted as real speech — filters pops and mic noise.
             min_speech_duration=0.05,
             # Silence duration before "turn ended".
-            # Raise to 0.5 if the agent cuts callers off mid-sentence.
-            # Lower to 0.2 for faster response if callers pause at natural breaks.
-            min_silence_duration=0.3,
+            # Raise further if the agent still cuts callers off mid-sentence.
+            # Lower to 0.3 for faster response if callers pause at natural breaks.
+            min_silence_duration=0.5,
             # Audio captured just before speech onset — catches the first syllable.
             prefix_padding_duration=0.1,
         ),
@@ -300,8 +300,8 @@ async def entrypoint(ctx: JobContext) -> None:
         # Barge-in: caller can interrupt the agent mid-sentence and it stops immediately.
         allow_interruptions=True,
         # How long the caller must speak to count as an interruption.
-        # Raise to 0.8 if background noise keeps cutting the agent off.
-        min_interruption_duration=0.5,
+        # Lower to 0.5 if callers struggle to interrupt the agent.
+        min_interruption_duration=0.8,
         # If VAD fires but no words are transcribed (background noise), agent resumes.
         resume_false_interruption=True,
     )
@@ -358,7 +358,7 @@ async def entrypoint(ctx: JobContext) -> None:
         logger.info(f"Conversation [{role}]: {' '.join(parts)[:120]!r}")
 
     # ── Start Pipeline and Greet ──────────────────────────────────────────────
-    await session.start(room=ctx.room, agent=RestaurantAgent())
+    await session.start(room=ctx.room, agent=RestaurantAgent(caller_number=caller_number))
 
     await session.generate_reply(
         instructions=(
