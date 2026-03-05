@@ -339,8 +339,9 @@ async def entrypoint(ctx: JobContext) -> None:
         llm=openai.LLM.with_azure(
             azure_deployment=os.environ.get("AZURE_OPENAI_DEPLOYMENT", "gpt-4o-mini"),
             api_version=os.environ.get("OPENAI_API_VERSION", "2024-10-01-preview"),
-            # gpt-4o-mini supports temperature (gpt-5.2 did not — reasoning model)
-            temperature=0.7,
+            # Low temperature for factual accuracy — reduces price/time hallucination.
+            # 0.7 is for creative writing; a restaurant host quoting prices needs 0.3.
+            temperature=0.3,
         ),
         # TTS — Deepgram Aura. Starts speaking as soon as the first LLM tokens arrive.
         # Other voice options:
