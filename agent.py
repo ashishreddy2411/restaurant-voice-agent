@@ -359,8 +359,9 @@ async def entrypoint(ctx: JobContext) -> None:
         # Semantically decides when the caller is done — not just waiting for silence.
         # Enables safely lowering min_endpointing_delay without cutting callers off.
         turn_detection=MultilingualModel(),
-        # NOTE: preemptive_generation disabled — active bug (livekit/agents #4219)
-        # causes duplicate LLM requests and double token cost. Re-enable once fixed.
+        # Start LLM inference speculatively on partial transcripts — biggest single
+        # latency win. Bug #4219 (duplicate LLM requests) is fixed in agents >= 1.4.2.
+        preemptive_generation=True,
         # Minimum wait after turn-detector fires before LLM call. Safe at 0.1s
         # because MultilingualModel handles semantic turn detection.
         min_endpointing_delay=0.1,
