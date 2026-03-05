@@ -218,16 +218,17 @@ def _build_transcript(session: AgentSession) -> str:
     """
     Build a human-readable transcript from the session's conversation history.
     Skips the system prompt (role='system') — that's internal, not conversation.
+
+    In livekit-agents v1.4, chat_ctx.messages() is a method call (not a property),
+    and msg.content is always a list[str | ImageContent | AudioContent].
     """
     lines = []
-    for msg in session.chat_ctx.messages:
+    for msg in session.chat_ctx.messages():  # note: method call, not attribute
         if msg.role not in ("user", "assistant"):
             continue
-        content = (
-            msg.content
-            if isinstance(msg.content, str)
-            else " ".join(str(c) for c in msg.content)
-        )
+        # content is always a list — extract only the text parts
+        text_parts = [c for c in msg.content if isinstance(c, str)]
+        content = " ".join(text_parts)
         label = "Caller" if msg.role == "user" else "Agent"
         lines.append(f"{label}: {content}")
     return "\n".join(lines)
@@ -283,10 +284,12 @@ async def entrypoint(ctx: JobContext) -> None:
         ),
         # STT — Deepgram nova-3: fast, accurate, handles accents well. Fully streaming.
         stt=deepgram.STT(model="nova-3", language="en-US"),
-        # LLM — Azure OpenAI. Reads from env vars: AZURE_OPENAI_API_KEY,
-        # AZURE_OPENAI_ENDPOINT, OPENAI_API_VERSION. Streams tokens immediately.
+        # LLM — Azure OpenAI. Reads AZURE_OPENAI_API_KEY and AZURE_OPENAI_ENDPOINT
+        # from env vars automatically. azure_deployment must match your deployment
+        # name in Azure AI Foundry exactly. Streams tokens immediately.
         llm=openai.LLM.with_azure(
-            model=os.environ.get("AZURE_OPENAI_DEPLOYMENT", "gpt-5.2-chat"),
+            azure_deployment=os.environ.get("AZURE_OPENAI_DEPLOYMENT", "gpt-5.2-chat"),
+            api_version=os.environ.get("OPENAI_API_VERSION", "2024-10-01-preview"),
         ),
         # TTS — Deepgram Aura. Starts speaking as soon as the first LLM tokens arrive.
         # Other voice options:
@@ -336,6 +339,23 @@ async def entrypoint(ctx: JobContext) -> None:
         )
 
     ctx.add_shutdown_callback(_on_shutdown)
+
+    # ── Session Event Listeners (debug visibility) ────────────────────────────
+    # These log every major state change so you can see exactly what the agent
+    # is doing in the terminal — useful for diagnosing silent failures.
+    @session.on("agent_state_changed")
+    def _on_agent_state(ev) -> None:
+        logger.info(f"Agent state: {ev.new_state}")
+
+    @session.on("user_input_transcribed")
+    def _on_transcript(ev) -> None:
+        logger.info(f"User said (final={ev.is_final}): {ev.transcript!r}")
+
+    @session.on("conversation_item_added")
+    def _on_item(ev) -> None:
+        role = getattr(ev.item, "role", "?")
+        parts = [c for c in getattr(ev.item, "content", []) if isinstance(c, str)]
+        logger.info(f"Conversation [{role}]: {' '.join(parts)[:120]!r}")
 
     # ── Start Pipeline and Greet ──────────────────────────────────────────────
     await session.start(room=ctx.room, agent=RestaurantAgent())
