@@ -265,7 +265,7 @@ def _build_transcript(session: AgentSession) -> str:
     and msg.content is always a list[str | ImageContent | AudioContent].
     """
     lines = []
-    for msg in session.chat_ctx.messages():  # note: method call, not attribute
+    for msg in session.history.messages():  # session.history is the public ChatContext property
         if msg.role not in ("user", "assistant"):
             continue
         # content is always a list — extract only the text parts
