@@ -446,6 +446,59 @@ def get_full_menu() -> dict[str, list[dict]]:
     return full
 
 
+# ─── Number-to-words helpers ──────────────────────────────────────────────────
+# Used by tools to pre-format prices/times in speech — so the LLM never touches
+# factual numbers and cannot hallucinate them.
+
+_ONES = [
+    "", "one", "two", "three", "four", "five", "six", "seven", "eight",
+    "nine", "ten", "eleven", "twelve", "thirteen", "fourteen", "fifteen",
+    "sixteen", "seventeen", "eighteen", "nineteen",
+]
+_TENS = ["", "", "twenty", "thirty", "forty", "fifty",
+         "sixty", "seventy", "eighty", "ninety"]
+
+
+def _int_to_words(n: int) -> str:
+    """Convert a non-negative integer to English words. Covers 0–9999."""
+    if n == 0:
+        return "zero"
+    if n < 20:
+        return _ONES[n]
+    if n < 100:
+        t, o = _TENS[n // 10], _ONES[n % 10]
+        return t + ("-" + o if o else "")
+    if n < 1000:
+        h = _ONES[n // 100] + " hundred"
+        r = n % 100
+        return h if r == 0 else h + " and " + _int_to_words(r)
+    return str(n)  # fallback for ≥1000
+
+
+def _price_to_words(dollars: int) -> str:
+    """Convert integer price to spoken English: 52 → 'fifty-two dollars'."""
+    suffix = "dollar" if dollars == 1 else "dollars"
+    return f"{_int_to_words(dollars)} {suffix}"
+
+
+def _time_to_spoken(t: str) -> str:
+    """Convert time string to spoken form: '11:00 AM' → 'eleven AM', '12:00 PM' → 'noon'."""
+    parts = t.strip().split()
+    if len(parts) != 2:
+        return t
+    time_part, period = parts[0], parts[1].upper()
+    try:
+        h, m = map(int, time_part.split(":"))
+    except ValueError:
+        return t
+    if h == 12 and m == 0 and period == "PM":
+        return "noon"
+    if h == 12 and m == 0 and period == "AM":
+        return "midnight"
+    hw = _int_to_words(h)
+    return hw + " " + period if m == 0 else f"{hw} {_int_to_words(m)} {period}"
+
+
 # ─── System Prompt ────────────────────────────────────────────────────────────
 # This defines who the agent IS and how it behaves on every call.
 # Personality changes go here — agent.py just calls this function.
@@ -521,12 +574,20 @@ Never answer any of the following from memory. Always call the tool first:
 • Dietary questions (vegetarian, vegan, gluten-free, allergies) → get_menu_items("all")
 • Any specific dish or price → check_item_availability("dish name")
 
-== ACCURACY RULE — THIS IS CRITICAL ==
+== ACCURACY RULE — SPEAK:: VERBATIM CONTRACT ==
 
-When a tool returns a price, time, or policy text: state those values VERBATIM.
-Do NOT round, estimate, or rephrase numbers. If the tool says $52, say "fifty-two dollars" — not "around fifty" or "$50".
-If the tool says "Monday–Friday, 3:00 PM – 6:00 PM", repeat exactly that.
-Your credibility depends entirely on accuracy.
+When a tool returns text beginning with SPEAK::, output the exact words that follow the
+SPEAK:: prefix. No changes. No rephrasing. No additions. No omissions. Read it like a script.
+
+Example:
+  Tool returns: SPEAK::The Filet Mignon is available tonight for fifty-two dollars.
+  You say:      The Filet Mignon is available tonight for fifty-two dollars.
+
+This rule is absolute. Every caller deserves the exact price, time, and policy — not
+your approximation of it. Your credibility depends entirely on this.
+
+Tool returns that do NOT begin with SPEAK:: are error or not-found messages containing
+no pricing data — you may rephrase those naturally.
 
 == PHONE CALL RULES ==
 
@@ -553,8 +614,9 @@ Vera: "We do! Happy hour runs Monday through Friday, three to six PM — two dol
 
 Example 2 — Price question:
 Caller: "How much is the Filet Mignon?"
-[Call check_item_availability("Filet Mignon"). Read the price verbatim from the result.]
-Vera: "The Filet Mignon is fifty-two dollars — an eight-ounce grass-fed tenderloin with truffle butter and fingerling potatoes. It's really special."
+[Call check_item_availability("Filet Mignon"). The tool returns a SPEAK:: string with the price already spelled out.]
+[Output those exact words — do not change "fifty-two dollars" to "around fifty" or "fifty bucks".]
+Vera: "The Filet Mignon is available tonight for fifty-two dollars. Grass-fed beef tenderloin, truffle butter, fingerling potatoes, and asparagus. It is gluten-free."
 
 Example 3 — Natural reservation with a celebration:
 Caller: "I'd like to make a reservation."

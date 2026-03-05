@@ -30,6 +30,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import sys
 from dataclasses import dataclass, field
 from textwrap import indent
@@ -42,6 +43,47 @@ os.environ.setdefault("SSL_CERT_FILE", certifi.where())
 
 from openai import AzureOpenAI
 from supabase import create_client
+from restaurant_data import RESTAURANT_INFO, MENU, SPECIALS
+
+
+# ─── Numeric faithfulness — deterministic check (no API call) ─────────────────
+_DIGIT_RE_EVAL = re.compile(r"\b\d+\b")
+
+
+def _collect_known_numbers() -> set[str]:
+    """
+    Extract all digit strings that legitimately appear in restaurant data.
+    These are the ONLY numbers the agent is ever allowed to speak.
+    """
+    known: set[str] = set()
+    for items in MENU.values():
+        for item in items:
+            known.add(str(item["price"]))
+    for s in SPECIALS:
+        p = s.get("price")
+        if p is not None:
+            known.add(str(p))
+    for val in RESTAURANT_INFO.values():
+        src = " ".join(val.values()) if isinstance(val, dict) else str(val)
+        known.update(_DIGIT_RE_EVAL.findall(src))
+    known.discard("")
+    return known
+
+
+_KNOWN_NUMBERS: set[str] = _collect_known_numbers()
+
+
+def check_numeric_faithfulness(agent_text: str) -> list[str]:
+    """
+    Flag any digit in agent_text that doesn't appear in restaurant data.
+    False positives occur for party sizes, years, etc. — treat as signals, not verdicts.
+    """
+    spoken = set(_DIGIT_RE_EVAL.findall(agent_text))
+    unknown = spoken - _KNOWN_NUMBERS
+    return [
+        f"Agent spoke '{n}' — not in restaurant data (hallucination or party size/year)"
+        for n in sorted(unknown)
+    ]
 
 
 # ─── Config ───────────────────────────────────────────────────────────────────
@@ -159,13 +201,20 @@ def _score_turn(
             response_format={"type": "json_object"},
         )
         data = json.loads(response.choices[0].message.content)
+        llm_issues: list[str] = data.get("issues", [])
+        # Deterministic numeric faithfulness check — free, no API call
+        numeric_issues = check_numeric_faithfulness(agent_text)
+        llm_issues.extend(numeric_issues)
+        accuracy = float(data.get("accuracy", 1.0))
+        if numeric_issues:
+            accuracy = min(accuracy, 0.5)
         return TurnScore(
             caller_text=caller_text,
             agent_text=agent_text,
-            accuracy=float(data.get("accuracy", 1.0)),
+            accuracy=accuracy,
             warmth=float(data.get("warmth", 3.0)),
             conciseness=float(data.get("conciseness", 3.0)),
-            issues=data.get("issues", []),
+            issues=llm_issues,
         )
     except Exception as e:
         # Don't fail the whole eval on a single LLM error

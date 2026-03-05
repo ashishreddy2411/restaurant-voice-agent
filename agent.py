@@ -29,8 +29,12 @@ os.environ.setdefault("SSL_CERT_FILE", certifi.where())
 
 import asyncio
 import logging
+import re
 import time
+from collections.abc import AsyncGenerator, AsyncIterable
 from typing import Annotated
+
+_DIGIT_RE = re.compile(r"\b\d+\b")
 
 from livekit.agents import (
     Agent,
@@ -45,7 +49,14 @@ from livekit.plugins import deepgram, openai, silero
 from livekit.plugins.turn_detector.multilingual import MultilingualModel
 
 import database
-from restaurant_data import RESTAURANT_INFO, RESTAURANT_NAME, build_system_prompt, get_full_menu
+from restaurant_data import (
+    RESTAURANT_INFO,
+    RESTAURANT_NAME,
+    build_system_prompt,
+    get_full_menu,
+    _price_to_words,
+    _time_to_spoken,
+)
 
 
 # ─── Logging ──────────────────────────────────────────────────────────────────
@@ -68,6 +79,51 @@ class RestaurantAgent(Agent):
     def __init__(self, caller_number: str = "unknown") -> None:
         super().__init__(instructions=build_system_prompt(caller_number))
         self._caller_number = caller_number
+        # Tracks digit strings returned by tools this turn — tts_node checks against this.
+        self._tool_output_facts: set[str] = set()
+
+    def _register_price(self, price: int) -> None:
+        """Record a price integer so tts_node can verify the LLM didn't substitute it."""
+        self._tool_output_facts.add(str(price))
+
+    # ── TTS Node Override — Faithfulness Monitor ──────────────────────────────
+    async def tts_node(
+        self,
+        text: AsyncIterable[str],
+        model_settings,
+    ) -> AsyncGenerator[rtc.AudioFrame, None]:
+        """
+        Monitoring wrapper around the default TTS node.
+
+        Forwards every audio frame immediately — zero latency added.
+        After each speech turn completes, checks if any digit the LLM spoke
+        was not in the tool output facts registered for this turn.
+        Mismatches are logged as warnings for alerting and eval — the call
+        is never interrupted.
+        """
+        accumulated: list[str] = []
+
+        async def _monitored_text() -> AsyncGenerator[str, None]:
+            async for chunk in text:
+                accumulated.append(chunk)
+                yield chunk
+
+        async for frame in Agent.default.tts_node(self, _monitored_text(), model_settings):
+            yield frame
+
+        # Post-speech check — audio already delivered; validate numeric faithfulness
+        full_text = "".join(accumulated)
+        spoken_numbers = set(_DIGIT_RE.findall(full_text))
+        unknown = spoken_numbers - self._tool_output_facts
+        if unknown and self._tool_output_facts:
+            # Only warn when tools were called this turn (avoids false positives on pure chat turns)
+            logger.warning(
+                "Faithfulness violation: agent spoke numbers not returned by any tool — "
+                f"spoke={sorted(unknown)}, tool_facts={sorted(self._tool_output_facts)}, "
+                f"text={full_text[:200]!r}, caller={self._caller_number}"
+            )
+        # Clear per-turn so stale facts from previous turns don't mask new violations
+        self._tool_output_facts.clear()
 
     # ── Tool: List Menu Items ────────────────────────────────────────────────
     @function_tool
@@ -95,14 +151,22 @@ class RestaurantAgent(Agent):
 
         lines = []
         for cat in categories:
-            lines.append(f"\n{cat.upper()}:")
-            for item in menu[cat]:
-                status = "AVAILABLE" if item["available"] else "NOT AVAILABLE TODAY"
-                tags = f" [{', '.join(item['tags'])}]" if item.get("tags") else ""
-                lines.append(
-                    f"  [{status}] {item['name']} — ${item['price']}{tags} — {item['description']}"
-                )
-        return "\n".join(lines)
+            available = [i for i in menu[cat] if i["available"]]
+            if not available:
+                lines.append(f"No {cat} available today.")
+                continue
+            parts = []
+            for item in available:
+                self._register_price(item["price"])
+                price_str = _price_to_words(item["price"])
+                dietary = [
+                    t for t in item.get("tags", [])
+                    if t in ("vegetarian", "vegan", "gluten-free", "contains-nuts", "dairy-free", "spicy")
+                ]
+                tag_note = f" ({', '.join(dietary)})" if dietary else ""
+                parts.append(f"{item['name']}{tag_note} at {price_str}")
+            lines.append(f"{cat.title()}: {'; '.join(parts)}.")
+        return "SPEAK::" + " ".join(lines)
 
     # ── Tool: Check a Specific Item ──────────────────────────────────────────
     @function_tool
@@ -119,24 +183,29 @@ class RestaurantAgent(Agent):
             for item in items:
                 if needle in item["name"].lower():
                     if item["available"]:
+                        self._register_price(item["price"])
+                        price_str = _price_to_words(item["price"])
+                        dietary = [
+                            t for t in item.get("tags", [])
+                            if t in ("vegetarian", "vegan", "gluten-free",
+                                     "contains-nuts", "dairy-free", "spicy")
+                        ]
+                        tag_note = f" It is {', '.join(dietary)}." if dietary else ""
                         return (
-                            f"{item['name']} is available today — ${item['price']}. "
-                            f"{item['description']}."
+                            f"SPEAK::{item['name']} is available tonight for {price_str}. "
+                            f"{item['description']}.{tag_note}"
                         )
-                    # Item found but unavailable — suggest alternatives in the same category
-                    alternatives = [
+                    # Item found but unavailable — suggest an alternative
+                    alts = [
                         i["name"] for i in menu[category]
                         if i["available"] and i["name"] != item["name"]
                     ]
-                    alt_text = (
-                        f" Similar alternatives: {', '.join(alternatives[:3])}."
-                        if alternatives else ""
-                    )
-                    return f"I'm sorry, {item['name']} is not available today.{alt_text}"
+                    alt_str = f" You might enjoy {alts[0]} instead." if alts else ""
+                    return f"SPEAK::I'm sorry, {item['name']} is not available tonight.{alt_str}"
 
         return (
-            f"I couldn't find '{item_name}' on our menu. "
-            "Would you like me to list a specific category?"
+            f"SPEAK::I couldn't find {item_name} on our menu. "
+            "Can I help you with a specific category like appetizers, mains, or desserts?"
         )
 
     # ── Tool: Restaurant Info ────────────────────────────────────────────────
@@ -158,15 +227,23 @@ class RestaurantAgent(Agent):
         """Get restaurant information: hours, address, parking, policies, events, etc."""
         query = info_type.lower().strip()
 
-        # Hours need special formatting
+        # Hours — convert time strings to spoken form
         if query == "hours":
-            lines = [f"{day}: {t}" for day, t in RESTAURANT_INFO["hours"].items()]
-            return "Our hours:\n" + "\n".join(lines)
+            spoken_lines = []
+            for day, time_range in RESTAURANT_INFO["hours"].items():
+                parts = time_range.split(" – ")
+                if len(parts) == 2:
+                    open_s = _time_to_spoken(parts[0].strip())
+                    close_s = _time_to_spoken(parts[1].strip())
+                    spoken_lines.append(f"{day}: {open_s} to {close_s}")
+                else:
+                    spoken_lines.append(f"{day}: {time_range}")
+            return "SPEAK::Our hours are: " + "; ".join(spoken_lines) + "."
 
-        # Exact key match
+        # Exact key match — wrap in SPEAK:: so LLM reads it verbatim
         value = RESTAURANT_INFO.get(query)
         if value and not isinstance(value, dict):
-            return str(value)
+            return f"SPEAK::{str(value)}"
 
         # Fuzzy alias matching — handles LLM guesses like "pet_policy", "dog policy", etc.
         aliases = {
@@ -199,9 +276,11 @@ class RestaurantAgent(Agent):
         }
         for keyword, key in aliases.items():
             if keyword in query:
-                return str(RESTAURANT_INFO.get(key, "I don't have that information on hand."))
+                result = RESTAURANT_INFO.get(key)
+                if result:
+                    return f"SPEAK::{str(result)}"
 
-        return "I don't have that specific information on hand — is there anything else I can help you with?"
+        return "SPEAK::I don't have that specific information on hand — is there anything else I can help you with?"
 
     # ── Tool: Save Reservation ───────────────────────────────────────────────
     @function_tool
@@ -243,14 +322,14 @@ class RestaurantAgent(Agent):
 
         if saved:
             return (
-                f"Perfect, you're all set! Table for {party_size} under {guest_name} "
+                f"SPEAK::Perfect, you're all set! Table for {party_size} under {guest_name} "
                 f"on {date} at {reservation_time}. "
                 f"We'll send a confirmation to {phone}. "
                 f"Please note we hold reservations for 15 minutes — if you're running late, give us a call!"
             )
         else:
             return (
-                f"I'm having a little trouble on my end right now, but I have all your details: "
+                f"SPEAK::I'm having a little trouble on my end right now, but I have all your details: "
                 f"table for {party_size} under {guest_name}, {date} at {reservation_time}. "
                 f"Expect a call from us at {phone} shortly to confirm. We're sorry for the inconvenience!"
             )
