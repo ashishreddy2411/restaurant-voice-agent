@@ -44,7 +44,7 @@ from livekit.agents import (
 from livekit.plugins import deepgram, openai, silero
 
 import database
-from restaurant_data import MENU, RESTAURANT_INFO, RESTAURANT_NAME, build_system_prompt
+from restaurant_data import RESTAURANT_INFO, RESTAURANT_NAME, build_system_prompt, get_full_menu
 
 
 # ─── Logging ──────────────────────────────────────────────────────────────────
@@ -81,23 +81,25 @@ class RestaurantAgent(Agent):
         """List menu items for a given category with prices and availability."""
         category = category.lower().strip()
 
+        menu = get_full_menu()
         if category == "all":
-            categories = list(MENU.keys())
-        elif category in MENU:
+            categories = list(menu.keys())
+        elif category in menu:
             categories = [category]
         else:
             return (
                 f"Unknown category '{category}'. "
-                "Available categories: appetizers, mains, desserts, drinks."
+                f"Available categories: {', '.join(menu.keys())}."
             )
 
         lines = []
         for cat in categories:
             lines.append(f"\n{cat.upper()}:")
-            for item in MENU[cat]:
+            for item in menu[cat]:
                 status = "AVAILABLE" if item["available"] else "NOT AVAILABLE TODAY"
+                tags = f" [{', '.join(item['tags'])}]" if item.get("tags") else ""
                 lines.append(
-                    f"  [{status}] {item['name']} — ${item['price']} — {item['description']}"
+                    f"  [{status}] {item['name']} — ${item['price']}{tags} — {item['description']}"
                 )
         return "\n".join(lines)
 
@@ -111,7 +113,8 @@ class RestaurantAgent(Agent):
         """Check if a specific menu item is available and return its details."""
         needle = item_name.lower()
 
-        for category, items in MENU.items():
+        menu = get_full_menu()
+        for category, items in menu.items():
             for item in items:
                 if needle in item["name"].lower():
                     if item["available"]:
@@ -121,7 +124,7 @@ class RestaurantAgent(Agent):
                         )
                     # Item found but unavailable — suggest alternatives in the same category
                     alternatives = [
-                        i["name"] for i in MENU[category]
+                        i["name"] for i in menu[category]
                         if i["available"] and i["name"] != item["name"]
                     ]
                     alt_text = (
