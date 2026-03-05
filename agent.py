@@ -331,8 +331,10 @@ async def entrypoint(ctx: JobContext) -> None:
         # from env vars automatically. azure_deployment must match your deployment
         # name in Azure AI Foundry exactly. Streams tokens immediately.
         llm=openai.LLM.with_azure(
-            azure_deployment=os.environ.get("AZURE_OPENAI_DEPLOYMENT", "gpt-5.2-chat"),
+            azure_deployment=os.environ.get("AZURE_OPENAI_DEPLOYMENT", "gpt-4o-mini"),
             api_version=os.environ.get("OPENAI_API_VERSION", "2024-10-01-preview"),
+            # gpt-4o-mini supports temperature (gpt-5.2 did not — reasoning model)
+            temperature=0.7,
         ),
         # TTS — Deepgram Aura. Starts speaking as soon as the first LLM tokens arrive.
         # Other voice options:
@@ -347,6 +349,12 @@ async def entrypoint(ctx: JobContext) -> None:
         min_interruption_duration=0.8,
         # If VAD fires but no words are transcribed (background noise), agent resumes.
         resume_false_interruption=True,
+        # Start LLM inference as soon as partial speech arrives, overlapping with the
+        # caller still talking. Cuts perceived latency significantly on phone calls.
+        preemptive_generation=True,
+        # Minimum wait after VAD end-of-turn before sending to LLM.
+        # Default is 0.5s — lower it since we already have VAD silence detection.
+        min_endpointing_delay=0.1,
     )
 
     # ── Max Call Duration ─────────────────────────────────────────────────────
