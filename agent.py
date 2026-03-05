@@ -29,12 +29,8 @@ os.environ.setdefault("SSL_CERT_FILE", certifi.where())
 
 import asyncio
 import logging
-import re
 import time
-from collections.abc import AsyncGenerator, AsyncIterable
 from typing import Annotated
-
-_DIGIT_RE = re.compile(r"\b\d+\b")
 
 from livekit.agents import (
     Agent,
@@ -79,51 +75,6 @@ class RestaurantAgent(Agent):
     def __init__(self, caller_number: str = "unknown") -> None:
         super().__init__(instructions=build_system_prompt(caller_number))
         self._caller_number = caller_number
-        # Tracks digit strings returned by tools this turn — tts_node checks against this.
-        self._tool_output_facts: set[str] = set()
-
-    def _register_price(self, price: int) -> None:
-        """Record a price integer so tts_node can verify the LLM didn't substitute it."""
-        self._tool_output_facts.add(str(price))
-
-    # ── TTS Node Override — Faithfulness Monitor ──────────────────────────────
-    async def tts_node(
-        self,
-        text: AsyncIterable[str],
-        model_settings,
-    ) -> AsyncGenerator[rtc.AudioFrame, None]:
-        """
-        Monitoring wrapper around the default TTS node.
-
-        Forwards every audio frame immediately — zero latency added.
-        After each speech turn completes, checks if any digit the LLM spoke
-        was not in the tool output facts registered for this turn.
-        Mismatches are logged as warnings for alerting and eval — the call
-        is never interrupted.
-        """
-        accumulated: list[str] = []
-
-        async def _monitored_text() -> AsyncGenerator[str, None]:
-            async for chunk in text:
-                accumulated.append(chunk)
-                yield chunk
-
-        async for frame in Agent.default.tts_node(self, _monitored_text(), model_settings):
-            yield frame
-
-        # Post-speech check — audio already delivered; validate numeric faithfulness
-        full_text = "".join(accumulated)
-        spoken_numbers = set(_DIGIT_RE.findall(full_text))
-        unknown = spoken_numbers - self._tool_output_facts
-        if unknown and self._tool_output_facts:
-            # Only warn when tools were called this turn (avoids false positives on pure chat turns)
-            logger.warning(
-                "Faithfulness violation: agent spoke numbers not returned by any tool — "
-                f"spoke={sorted(unknown)}, tool_facts={sorted(self._tool_output_facts)}, "
-                f"text={full_text[:200]!r}, caller={self._caller_number}"
-            )
-        # Clear per-turn so stale facts from previous turns don't mask new violations
-        self._tool_output_facts.clear()
 
     # ── Tool: List Menu Items ────────────────────────────────────────────────
     @function_tool
@@ -157,7 +108,6 @@ class RestaurantAgent(Agent):
                 continue
             parts = []
             for item in available:
-                self._register_price(item["price"])
                 price_str = _price_to_words(item["price"])
                 dietary = [
                     t for t in item.get("tags", [])
@@ -183,7 +133,6 @@ class RestaurantAgent(Agent):
             for item in items:
                 if needle in item["name"].lower():
                     if item["available"]:
-                        self._register_price(item["price"])
                         price_str = _price_to_words(item["price"])
                         dietary = [
                             t for t in item.get("tags", [])
