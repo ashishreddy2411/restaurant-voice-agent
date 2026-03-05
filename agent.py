@@ -14,9 +14,18 @@ Module responsibilities:
 
 from __future__ import annotations
 
+import os
+
+# ── macOS SSL fix ─────────────────────────────────────────────────────────────
+# Python installed from python.org on Mac doesn't bundle SSL certificates.
+# This must happen before any other imports so aiohttp and livekit use the
+# correct certificate bundle when making HTTPS/WSS connections.
+import certifi
+os.environ.setdefault("SSL_CERT_FILE", certifi.where())
+# ─────────────────────────────────────────────────────────────────────────────
+
 import asyncio
 import logging
-import os
 import time
 from typing import Annotated
 
