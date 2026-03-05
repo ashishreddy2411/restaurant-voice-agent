@@ -1,6 +1,6 @@
 # Restaurant Voice Agent — Vera
 
-A production-grade AI phone receptionist built on LiveKit Agents. Vera answers real phone calls, discusses the menu, handles reservations, and never makes up facts.
+An AI phone receptionist built on LiveKit Agents. Vera answers real phone calls, discusses the menu, handles reservations, and quotes factual data accurately from verified sources.
 
 **Pipeline:** Caller Phone → Twilio SIP → LiveKit → Silero VAD → Deepgram STT → Azure OpenAI → Deepgram TTS → Caller
 
