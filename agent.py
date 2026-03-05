@@ -325,8 +325,9 @@ async def entrypoint(ctx: JobContext) -> None:
             # Audio captured just before speech onset — catches the first syllable.
             prefix_padding_duration=0.1,
         ),
-        # STT — Deepgram nova-3: fast, accurate, handles accents well. Fully streaming.
-        stt=deepgram.STT(model="nova-3", language="en-US"),
+        # STT — nova-2-phonecall is tuned for narrow-band 8kHz PSTN audio (real phone calls).
+        # Switch back to nova-3 if testing via browser/microphone only.
+        stt=deepgram.STT(model="nova-2-phonecall", language="en-US"),
         # LLM — Azure OpenAI. Reads AZURE_OPENAI_API_KEY and AZURE_OPENAI_ENDPOINT
         # from env vars automatically. azure_deployment must match your deployment
         # name in Azure AI Foundry exactly. Streams tokens immediately.

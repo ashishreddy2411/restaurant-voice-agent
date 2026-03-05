@@ -12,5 +12,5 @@ if [ -n "$OLD_PID" ]; then
     sleep 1
 fi
 
-echo "Starting restaurant agent (dev mode — auto-dispatches for playground testing)..."
-$VENV_PYTHON agent.py dev
+echo "Starting restaurant agent (production mode — waits for SIP dispatch)..."
+$VENV_PYTHON agent.py start

@@ -1,0 +1,7 @@
+{
+  "trunk": {
+    "name": "restaurant-twilio-inbound",
+    "numbers": ["+1XXXXXXXXXX"],
+    "krisp_enabled": true
+  }
+}
