@@ -254,10 +254,11 @@ async def entrypoint(ctx: JobContext) -> None:
     # Phone calls: SIP participant with phone number in attributes.
     # Browser tests: you joining from the LiveKit Playground.
     participant = await ctx.wait_for_participant()
+    _sip_number = participant.attributes.get("sip.phoneNumber")
     caller_number = (
-        participant.attributes.get("sip.phoneNumber")
-        or participant.identity
-        or "unknown"
+        _sip_number
+        if isinstance(_sip_number, str) and _sip_number
+        else participant.identity or "unknown"
     )
     logger.info(f"Call from: {caller_number}")
 
