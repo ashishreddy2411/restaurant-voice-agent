@@ -294,8 +294,6 @@ async def entrypoint(ctx: JobContext) -> None:
         llm=openai.LLM.with_azure(
             azure_deployment=os.environ.get("AZURE_OPENAI_DEPLOYMENT", "gpt-5.2-chat"),
             api_version=os.environ.get("OPENAI_API_VERSION", "2024-10-01-preview"),
-            # Lower temperature = more consistent, on-topic replies (0.0–1.0).
-            temperature=0.7,
         ),
         # TTS — Deepgram Aura. Starts speaking as soon as the first LLM tokens arrive.
         # Other voice options:
